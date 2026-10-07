@@ -7,5 +7,6 @@ mkdir -p "$APP/Contents/MacOS"
 cp Info.plist "$APP/Contents/Info.plist"
 swiftc -O -swift-version 5 Sources/main.swift -o "$APP/Contents/MacOS/MacRecorder" \
   -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Carbon
-codesign --force --sign - "$APP"
+# The fixed designated requirement keeps the macOS permissions across rebuilds.
+codesign --force --sign - -r='designated => identifier "dev.macrecorder.app"' "$APP"
 echo "Built $APP"

@@ -5,14 +5,42 @@ import ScreenCaptureKit
 
 // MARK: - Settings
 
-let hotkeyKeyCode = UInt32(kVK_ANSI_9)
-let hotkeyModifiers = UInt32(cmdKey | shiftKey)
+let defaultHotkey = "cmd+shift+9"
+let hotkeyDefaultsKey = "hotkey"
 let bubbleDiameter: CGFloat = 220
 let bubbleMargin: CGFloat = 24
 let framesPerSecond: Int32 = 30
 let videoBitrate = 8_000_000
 let outputDirectory = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Movies/Recordings")
+
+private let hotkeyKeyCodes: [String: Int] = [
+    "0": kVK_ANSI_0, "1": kVK_ANSI_1, "2": kVK_ANSI_2, "3": kVK_ANSI_3, "4": kVK_ANSI_4,
+    "5": kVK_ANSI_5, "6": kVK_ANSI_6, "7": kVK_ANSI_7, "8": kVK_ANSI_8, "9": kVK_ANSI_9,
+    "a": kVK_ANSI_A, "b": kVK_ANSI_B, "c": kVK_ANSI_C, "d": kVK_ANSI_D, "e": kVK_ANSI_E,
+    "f": kVK_ANSI_F, "g": kVK_ANSI_G, "h": kVK_ANSI_H, "i": kVK_ANSI_I, "j": kVK_ANSI_J,
+    "k": kVK_ANSI_K, "l": kVK_ANSI_L, "m": kVK_ANSI_M, "n": kVK_ANSI_N, "o": kVK_ANSI_O,
+    "p": kVK_ANSI_P, "q": kVK_ANSI_Q, "r": kVK_ANSI_R, "s": kVK_ANSI_S, "t": kVK_ANSI_T,
+    "u": kVK_ANSI_U, "v": kVK_ANSI_V, "w": kVK_ANSI_W, "x": kVK_ANSI_X, "y": kVK_ANSI_Y,
+    "z": kVK_ANSI_Z, "space": kVK_Space,
+]
+
+private let hotkeyModifierFlags: [String: Int] = [
+    "cmd": cmdKey, "command": cmdKey, "shift": shiftKey,
+    "option": optionKey, "opt": optionKey, "alt": optionKey, "ctrl": controlKey, "control": controlKey,
+]
+
+/// Parses text like "cmd+shift+9" into a Carbon key code and modifier mask. Needs at least one modifier.
+func parseHotkey(_ text: String) -> (keyCode: UInt32, modifiers: UInt32)? {
+    let parts = text.lowercased().split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
+    guard let key = parts.last, let keyCode = hotkeyKeyCodes[key] else { return nil }
+    var modifiers = 0
+    for part in parts.dropLast() {
+        guard let flag = hotkeyModifierFlags[part] else { return nil }
+        modifiers |= flag
+    }
+    return modifiers == 0 ? nil : (UInt32(keyCode), UInt32(modifiers))
+}
 
 func mainDisplayID() -> CGDirectDisplayID {
     let number = NSScreen.main?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
@@ -338,7 +366,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem.button?.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: "Mac Recorder")
         statusItem.button?.target = self
-        statusItem.button?.action = #selector(togglePanel)
+        statusItem.button?.action = #selector(statusItemClicked)
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         controls.onRecordTapped = { [weak self] in self?.toggleRecording() }
         controls.onMicTapped = { [weak self] in self?.toggleMic() }
@@ -346,6 +375,15 @@ final class AppController: NSObject, NSApplicationDelegate {
 
         registerHotkey()
         refreshControls()
+    }
+
+    @objc private func statusItemClicked() {
+        guard NSApp.currentEvent?.type == .rightMouseUp else { return togglePanel() }
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Quit Mac Recorder", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
     }
 
     @objc func togglePanel() {
@@ -458,11 +496,15 @@ final class AppController: NSObject, NSApplicationDelegate {
             return noErr
         }, 1, &eventType, Unmanaged.passUnretained(self).toOpaque(), nil)
 
+        let configured = defaults.string(forKey: hotkeyDefaultsKey) ?? defaultHotkey
+        guard let hotkey = parseHotkey(configured) else {
+            return showError("The shortcut \"\(configured)\" is not valid. Use a format like cmd+shift+9.")
+        }
         var hotKeyRef: EventHotKeyRef?
         let hotKeyID = EventHotKeyID(signature: OSType(0x4D52_434B), id: 1)
-        let status = RegisterEventHotKey(hotkeyKeyCode, hotkeyModifiers, hotKeyID,
+        let status = RegisterEventHotKey(hotkey.keyCode, hotkey.modifiers, hotKeyID,
                                          GetApplicationEventTarget(), 0, &hotKeyRef)
-        if status != noErr { showError("Could not register Cmd+Shift+9. Another app may already use it.") }
+        if status != noErr { showError("Could not register \(configured). Another app may already use it.") }
     }
 
     private func showError(_ message: String) {
