@@ -7,8 +7,14 @@
 </p>
 
 <p align="center">
-  <a href="docs/demo.mp4">Watch the demo with full quality</a>
+  <a href="https://github.com/RotemElya/mac-recorder/releases/latest"><b>Download ›</b></a>
+  &nbsp;·&nbsp;
+  <a href="#build-from-source"><b>Build from source ›</b></a>
+  &nbsp;·&nbsp;
+  <a href="docs/demo.mp4">Demo video</a>
 </p>
+
+<p align="center">Free and open source. For macOS 14 and later.</p>
 
 > The demo is an animation drawn over a real screenshot of a Mac desktop, not a live capture.
 > The green circle is where the camera bubble appears.
@@ -60,6 +66,21 @@ A small panel shows three buttons. That is the whole app.
 
 ## Install
 
+### Download (no tools needed)
+
+1. Download `MacRecorder.zip` from the [latest release](https://github.com/RotemElya/mac-recorder/releases/latest) and unzip it.
+2. Drag `MacRecorder.app` to `Applications`.
+3. macOS blocks apps that are not signed by an Apple developer account, and this one is not. Open the Terminal and run this once:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/MacRecorder.app
+   ```
+
+4. Open the app, press `Cmd+Shift+9`, and allow **Screen Recording**, **Microphone** and **Camera** when macOS asks.
+   After you allow Screen Recording, quit the app (right-click the dot, then Quit) and open it again.
+
+### Build from source
+
 You need the Xcode command line tools (`xcode-select --install`).
 
 ```bash
@@ -69,10 +90,18 @@ cd mac-recorder
 ```
 
 The script builds the app, copies it to `/Applications` and starts it when you log in.
-macOS asks for **Screen Recording**, **Microphone** and **Camera**.
-After you allow Screen Recording, quit the app (right-click the dot, then Quit) and open it again.
 
-To remove it:
+**You need the whole repository.** `install.sh` builds from `Sources/main.swift`, `Info.plist` and `build.sh`. If you copy only some of the files, it will not work. Always clone the full repo.
+
+### Install with your AI assistant
+
+If you use an AI coding assistant (Claude Code, Cursor, Codex and others), you can give it this repo and let it do the steps:
+
+> Clone https://github.com/RotemElya/mac-recorder, read the README, and install it on my Mac.
+
+The assistant can read this file, run `install.sh`, and fix small problems on the way. It still cannot press the macOS permission buttons for you. You allow Screen Recording, Microphone and Camera yourself.
+
+### Remove
 
 ```bash
 ./uninstall.sh
@@ -97,7 +126,7 @@ Everything is in [`Sources/main.swift`](Sources/main.swift):
 
 ## Good to know
 
-- The app is signed on your own Mac, not with an Apple developer account. Always build it with `install.sh`. A downloaded copy is blocked by macOS.
+- The app is signed locally, not with an Apple developer account. That is why a downloaded copy needs the `xattr` step above.
 - macOS can ask you again to allow screen capture from time to time. That is a macOS rule for apps that record the screen directly.
 - Not yet tested on a clean Mac other than the author's.
 
