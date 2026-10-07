@@ -345,7 +345,6 @@ final class AppController: NSObject, NSApplicationDelegate {
         controls.onCameraTapped = { [weak self] in self?.toggleCamera() }
 
         registerHotkey()
-        if cameraOn { Task { await self.setCamera(true) } }
         refreshControls()
     }
 
@@ -355,6 +354,17 @@ final class AppController: NSObject, NSApplicationDelegate {
         } else {
             refreshControls()
             controls.show()
+        }
+        syncBubble()
+    }
+
+    // The bubble shows only while the panel is open or a recording runs, so the camera stays off otherwise.
+    private func syncBubble() {
+        guard cameraOn, controls.isVisible || isRecording else { return bubble.hide() }
+        do { try bubble.show() } catch {
+            cameraOn = false
+            refreshControls()
+            showError(error.localizedDescription)
         }
     }
 
@@ -386,15 +396,9 @@ final class AppController: NSObject, NSApplicationDelegate {
                 refreshControls()
                 return showError("Camera access is off. Turn it on in System Settings > Privacy & Security > Camera.")
             }
-            do { try bubble.show() } catch {
-                cameraOn = false
-                refreshControls()
-                return showError(error.localizedDescription)
-            }
-        } else {
-            bubble.hide()
         }
         cameraOn = on
+        syncBubble()
         refreshControls()
     }
 
@@ -417,6 +421,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         isRecording = true
         startedAt = Date()
         controls.hide()
+        syncBubble()
         startTimer()
         refreshControls()
     }
@@ -428,6 +433,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         statusItem.button?.title = ""
         statusItem.button?.contentTintColor = nil
         controls.hide()
+        syncBubble()
         refreshControls()
         if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
     }
