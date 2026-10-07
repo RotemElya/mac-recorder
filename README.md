@@ -19,7 +19,7 @@ Videos are saved to `~/Movies/Recordings` as `.mp4`.
 You need macOS 14 or newer and the Xcode command line tools (`xcode-select --install`).
 
 ```bash
-git clone <this repo>
+git clone https://github.com/RotemElya/mac-recorder.git
 cd mac-recorder
 ./install.sh
 ```
