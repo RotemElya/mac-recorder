@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreAudio
 import Carbon.HIToolbox
 import ScreenCaptureKit
 
@@ -120,6 +121,14 @@ enum RecorderError: LocalizedError {
     }
 }
 
+/// Wireless inputs (a nearby iPhone, Bluetooth headsets) record in a low-quality call mode that
+/// sounds robotic, so the built-in microphone wins when the Mac has one.
+func preferredMicrophone() -> AVCaptureDevice? {
+    let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified)
+    let builtIn = discovery.devices.first { $0.transportType == Int32(bitPattern: kAudioDeviceTransportTypeBuiltIn) }
+    return builtIn ?? AVCaptureDevice.default(for: .audio)
+}
+
 final class Recorder: NSObject, SCStreamOutput, AVCaptureAudioDataOutputSampleBufferDelegate {
     private let queue = DispatchQueue(label: "recorder")
     private let micSession = AVCaptureSession()
@@ -189,7 +198,7 @@ final class Recorder: NSObject, SCStreamOutput, AVCaptureAudioDataOutputSampleBu
     }
 
     private func configureMicrophone() throws -> AVCaptureAudioDataOutput {
-        guard let device = AVCaptureDevice.default(for: .audio) else { throw RecorderError.noMicrophone }
+        guard let device = preferredMicrophone() else { throw RecorderError.noMicrophone }
         let input = try AVCaptureDeviceInput(device: device)
         if micSession.inputs.isEmpty, micSession.canAddInput(input) { micSession.addInput(input) }
         let output = AVCaptureAudioDataOutput()
