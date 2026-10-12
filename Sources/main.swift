@@ -129,6 +129,25 @@ func preferredMicrophone() -> AVCaptureDevice? {
     return builtIn ?? AVCaptureDevice.default(for: .audio)
 }
 
+/// Copy of the sample with its timestamps moved back by `offset`.
+private func retimed(_ buffer: CMSampleBuffer, by offset: CMTime) -> CMSampleBuffer? {
+    guard offset != .zero else { return buffer }
+    var count: CMItemCount = 0
+    CMSampleBufferGetSampleTimingInfoArray(buffer, entryCount: 0, arrayToFill: nil, entriesNeededOut: &count)
+    var timings = [CMSampleTimingInfo](repeating: CMSampleTimingInfo(), count: count)
+    CMSampleBufferGetSampleTimingInfoArray(buffer, entryCount: count, arrayToFill: &timings, entriesNeededOut: &count)
+    for index in timings.indices {
+        timings[index].presentationTimeStamp = CMTimeSubtract(timings[index].presentationTimeStamp, offset)
+        if timings[index].decodeTimeStamp.isValid {
+            timings[index].decodeTimeStamp = CMTimeSubtract(timings[index].decodeTimeStamp, offset)
+        }
+    }
+    var result: CMSampleBuffer?
+    CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: buffer, sampleTimingEntryCount: count,
+                                          sampleTimingArray: &timings, sampleBufferOut: &result)
+    return result
+}
+
 final class Recorder: NSObject, SCStreamOutput, AVCaptureAudioDataOutputSampleBufferDelegate {
     private let queue = DispatchQueue(label: "recorder")
     private let micSession = AVCaptureSession()
@@ -139,6 +158,10 @@ final class Recorder: NSObject, SCStreamOutput, AVCaptureAudioDataOutputSampleBu
     private var sessionStart: CMTime?
     private var lastVideoTime = CMTime.zero
     private var micEnabled = true
+    private var isPaused = false
+    private var pausedAtHostTime = CMTime.zero
+    private var timeOffset = CMTime.zero
+    private var lastAudioTime: CMTime?
     private(set) var outputURL: URL?
 
     func start(excludingWindowIDs: [CGWindowID], micEnabled: Bool) async throws {
@@ -174,6 +197,21 @@ final class Recorder: NSObject, SCStreamOutput, AVCaptureAudioDataOutputSampleBu
 
     func setMicEnabled(_ enabled: Bool) {
         queue.async { self.micEnabled = enabled }
+    }
+
+    /// Frames and microphone samples are dropped while paused. On resume the paused time is cut out
+    /// of the timeline. Both the screen and the microphone stamp samples with the host clock, so the
+    /// gap is measured there and does not depend on when the next screen frame arrives.
+    func setPaused(_ paused: Bool) {
+        queue.async {
+            let now = CMClockGetTime(CMClockGetHostTimeClock())
+            if paused, !self.isPaused {
+                self.pausedAtHostTime = now
+            } else if !paused, self.isPaused {
+                self.timeOffset = CMTimeAdd(self.timeOffset, CMTimeSubtract(now, self.pausedAtHostTime))
+            }
+            self.isPaused = paused
+        }
     }
 
     func stop() async -> URL? {
@@ -246,33 +284,46 @@ final class Recorder: NSObject, SCStreamOutput, AVCaptureAudioDataOutputSampleBu
               let rawStatus = attachments.first?[.status] as? Int,
               SCFrameStatus(rawValue: rawStatus) == .complete else { return }
 
+        guard !isPaused else { return }
         let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         if sessionStart == nil {
             writer.startSession(atSourceTime: time)
             sessionStart = time
         }
-        if videoInput.isReadyForMoreMediaData, videoInput.append(sampleBuffer) {
-            lastVideoTime = time
+        guard videoInput.isReadyForMoreMediaData, let buffer = retimed(sampleBuffer, by: timeOffset) else { return }
+        if videoInput.append(buffer) {
+            lastVideoTime = CMTimeSubtract(time, timeOffset)
         }
     }
 
     // Microphone samples. Muting drops them, which leaves silence in the audio track.
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard micEnabled, let start = sessionStart, let audioInput, audioInput.isReadyForMoreMediaData else { return }
-        guard CMSampleBufferGetPresentationTimeStamp(sampleBuffer) >= start else { return }
-        audioInput.append(sampleBuffer)
+        guard micEnabled, !isPaused, let start = sessionStart,
+              let audioInput, audioInput.isReadyForMoreMediaData else { return }
+        let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard time >= start, let buffer = retimed(sampleBuffer, by: timeOffset) else { return }
+        let adjusted = CMTimeSubtract(time, timeOffset)
+        if let last = lastAudioTime, adjusted < last { return }
+        if audioInput.append(buffer) {
+            lastAudioTime = CMTimeAdd(adjusted, CMSampleBufferGetDuration(sampleBuffer))
+        }
     }
 }
 
 // MARK: - Control panel
 
 final class ControlPanel {
+    private static let idleWidth: CGFloat = 460
+    // Wide enough for the extra Pause button while a recording runs.
+    private static let recordingWidth: CGFloat = 600
     let panel: NSPanel
     private let recordButton = NSButton()
+    private let pauseButton = NSButton()
     private let micButton = NSButton()
     private let cameraButton = NSButton()
 
     var onRecordTapped: (() -> Void)?
+    var onPauseTapped: (() -> Void)?
     var onMicTapped: (() -> Void)?
     var onCameraTapped: (() -> Void)?
 
@@ -280,7 +331,7 @@ final class ControlPanel {
     var isVisible: Bool { panel.isVisible }
 
     init() {
-        let size = NSSize(width: 460, height: 64)
+        let size = NSSize(width: ControlPanel.idleWidth, height: 64)
         panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
@@ -297,8 +348,10 @@ final class ControlPanel {
         background.wantsLayer = true
         background.layer?.cornerRadius = 16
         background.layer?.masksToBounds = true
+        background.autoresizingMask = [.width, .height]
 
         for (button, action) in [(recordButton, #selector(recordTapped)),
+                                 (pauseButton, #selector(pauseTapped)),
                                  (micButton, #selector(micTapped)),
                                  (cameraButton, #selector(cameraTapped))] {
             button.bezelStyle = .rounded
@@ -308,7 +361,7 @@ final class ControlPanel {
             button.action = action
         }
 
-        let stack = NSStackView(views: [recordButton, micButton, cameraButton])
+        let stack = NSStackView(views: [recordButton, pauseButton, micButton, cameraButton])
         stack.orientation = .horizontal
         stack.spacing = 10
         stack.distribution = .fillEqually
@@ -322,9 +375,17 @@ final class ControlPanel {
         panel.contentView = background
     }
 
-    func update(isRecording: Bool, micOn: Bool, cameraOn: Bool) {
+    func update(isRecording: Bool, isPaused: Bool, micOn: Bool, cameraOn: Bool) {
         set(recordButton, title: isRecording ? "Stop" : "Record",
             symbol: isRecording ? "stop.circle.fill" : "record.circle.fill", tint: .systemRed)
+        pauseButton.isHidden = !isRecording
+        set(pauseButton, title: isPaused ? "Resume" : "Pause",
+            symbol: isPaused ? "play.fill" : "pause.fill", tint: isPaused ? .systemOrange : nil)
+        var frame = panel.frame
+        let width = isRecording ? ControlPanel.recordingWidth : ControlPanel.idleWidth
+        frame.origin.x += (frame.width - width) / 2
+        frame.size.width = width
+        panel.setFrame(frame, display: true)
         set(micButton, title: micOn ? "Mic on" : "Mic off",
             symbol: micOn ? "mic.fill" : "mic.slash.fill", tint: micOn ? nil : .systemOrange)
         set(cameraButton, title: cameraOn ? "Camera on" : "Camera off",
@@ -347,6 +408,7 @@ final class ControlPanel {
     }
 
     @objc private func recordTapped() { onRecordTapped?() }
+    @objc private func pauseTapped() { onPauseTapped?() }
     @objc private func micTapped() { onMicTapped?() }
     @objc private func cameraTapped() { onCameraTapped?() }
 }
@@ -359,7 +421,10 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let recorder = Recorder()
     private let bubble = CameraBubble()
     private var isRecording = false
+    private var isPaused = false
     private var startedAt = Date()
+    private var pausedTotal: TimeInterval = 0
+    private var pausedAt: Date?
     private var timer: Timer?
     private let defaults = UserDefaults.standard
 
@@ -379,6 +444,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         controls.onRecordTapped = { [weak self] in self?.toggleRecording() }
+        controls.onPauseTapped = { [weak self] in self?.togglePause() }
         controls.onMicTapped = { [weak self] in self?.toggleMic() }
         controls.onCameraTapped = { [weak self] in self?.toggleCamera() }
 
@@ -416,7 +482,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func refreshControls() {
-        controls.update(isRecording: isRecording, micOn: micOn, cameraOn: cameraOn)
+        controls.update(isRecording: isRecording, isPaused: isPaused, micOn: micOn, cameraOn: cameraOn)
     }
 
     // MARK: Toggles
@@ -451,6 +517,21 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     // MARK: Recording
 
+    private func togglePause() {
+        guard isRecording else { return }
+        isPaused.toggle()
+        recorder.setPaused(isPaused)
+        if isPaused {
+            pausedAt = Date()
+        } else if let pausedAt {
+            pausedTotal += Date().timeIntervalSince(pausedAt)
+            self.pausedAt = nil
+        }
+        statusItem.button?.contentTintColor = isPaused ? .systemOrange : .systemRed
+        updateTimerTitle()
+        refreshControls()
+    }
+
     private func toggleRecording() {
         Task { isRecording ? await stopRecording() : await startRecording() }
     }
@@ -466,32 +547,39 @@ final class AppController: NSObject, NSApplicationDelegate {
             return showError(error.localizedDescription)
         }
         isRecording = true
+        isPaused = false
+        pausedTotal = 0
+        pausedAt = nil
         startedAt = Date()
-        controls.hide()
         syncBubble()
         startTimer()
         refreshControls()
     }
 
     @MainActor private func stopRecording() async {
-        let url = await recorder.stop()
+        _ = await recorder.stop()
         isRecording = false
+        isPaused = false
         timer?.invalidate()
         statusItem.button?.title = ""
         statusItem.button?.contentTintColor = nil
         controls.hide()
         syncBubble()
         refreshControls()
-        if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
     }
 
     private func startTimer() {
         statusItem.button?.contentTintColor = .systemRed
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let seconds = Int(Date().timeIntervalSince(self.startedAt))
-            self.statusItem.button?.title = String(format: " %02d:%02d", seconds / 60, seconds % 60)
+            self?.updateTimerTitle()
         }
+    }
+
+    private func updateTimerTitle() {
+        let now = pausedAt ?? Date()
+        let seconds = Int(now.timeIntervalSince(startedAt) - pausedTotal)
+        let prefix = isPaused ? " ⏸" : " "
+        statusItem.button?.title = String(format: "%@%02d:%02d", prefix, seconds / 60, seconds % 60)
     }
 
     // MARK: Hotkey

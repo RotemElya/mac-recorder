@@ -29,13 +29,14 @@ A small panel shows three buttons. That is the whole app.
 | Button | What it does |
 | --- | --- |
 | **Record / Stop** | Starts or stops the screen recording. |
+| **Pause / Resume** | Appears while you record. The paused time is cut out of the video. |
 | **Mic on / off** | Turns your microphone on or off. Works while you record. |
 | **Camera on / off** | Shows your camera in a round bubble in the top-left corner. |
 
 ## A shortcut for everything
 
 - **Press `Cmd+Shift+9`** to open the panel.
-- **Press it again** to close the panel. While you record, it brings the panel back so you can stop.
+- **Press it again** to close the panel, or bring it back. The panel stays open while you record, so you can pause or stop.
 - **Right-click the menu bar dot** to quit.
 - **The red timer** in the menu bar shows that a recording is running.
 
@@ -44,7 +45,7 @@ A small panel shows three buttons. That is the whole app.
 - **The panel is never in your video.** It hides itself from the recording.
 - **The camera bubble is.** It is part of the picture, so your viewers see you.
 - **The camera is on only when it has to be.** It runs while the panel is open or while you record, and turns off otherwise. Your camera light is not on all day.
-- **Your video is an `.mp4`** in `~/Movies/Recordings`, and Finder opens on it when you stop.
+- **Your video is an `.mp4`** in `~/Movies/Recordings`.
 
 ## Private by design
 
