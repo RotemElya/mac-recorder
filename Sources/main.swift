@@ -455,10 +455,18 @@ final class AppController: NSObject, NSApplicationDelegate {
     @objc private func statusItemClicked() {
         guard NSApp.currentEvent?.type == .rightMouseUp else { return togglePanel() }
         let menu = NSMenu()
+        let openItem = menu.addItem(withTitle: "Open Recordings Folder", action: #selector(openRecordingsFolder), keyEquivalent: "o")
+        openItem.target = self
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Mac Recorder", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
+    }
+
+    @objc private func openRecordingsFolder() {
+        try? FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(outputDirectory)
     }
 
     @objc func togglePanel() {
