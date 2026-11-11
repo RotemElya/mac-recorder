@@ -227,7 +227,11 @@ final class Recorder: NSObject, SCStreamOutput, AVCaptureAudioDataOutputSampleBu
                 }
                 self.videoInput?.markAsFinished()
                 self.audioInput?.markAsFinished()
-                writer.endSession(atSourceTime: self.lastVideoTime)
+                // The screen only sends a frame when something changes, so a still screen would cut the
+                // video short at its last frame. End the session at the real stop time instead.
+                let hostNow = self.isPaused ? self.pausedAtHostTime : CMClockGetTime(CMClockGetHostTimeClock())
+                let end = CMTimeSubtract(hostNow, self.timeOffset)
+                writer.endSession(atSourceTime: max(end, self.lastVideoTime))
                 writer.finishWriting {
                     continuation.resume(returning: writer.status == .completed ? self.outputURL : nil)
                 }
@@ -422,6 +426,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let bubble = CameraBubble()
     private var isRecording = false
     private var isPaused = false
+    // A second click while a recording is still starting or stopping would start a second one on top.
+    private var isSwitchingRecording = false
     private var startedAt = Date()
     private var pausedTotal: TimeInterval = 0
     private var pausedAt: Date?
@@ -455,6 +461,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     @objc private func statusItemClicked() {
         guard NSApp.currentEvent?.type == .rightMouseUp else { return togglePanel() }
         let menu = NSMenu()
+        let micName = preferredMicrophone()?.localizedName ?? "none found"
+        menu.addItem(withTitle: "Microphone: \(micName)", action: nil, keyEquivalent: "").isEnabled = false
         let openItem = menu.addItem(withTitle: "Open Recordings Folder", action: #selector(openRecordingsFolder), keyEquivalent: "o")
         openItem.target = self
         menu.addItem(.separator())
@@ -541,7 +549,12 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func toggleRecording() {
-        Task { isRecording ? await stopRecording() : await startRecording() }
+        guard !isSwitchingRecording else { return }
+        isSwitchingRecording = true
+        Task {
+            if isRecording { await stopRecording() } else { await startRecording() }
+            isSwitchingRecording = false
+        }
     }
 
     @MainActor private func startRecording() async {
